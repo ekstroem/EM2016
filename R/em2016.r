@@ -1,5 +1,3 @@
-groupsize    <- 4     # number of teams per group
-ngroups      <- 4     # number of groups
 normalgoals  <- 2.75  # Average number of goals in a match
 winpoints    <- 3     # Number of point for winning a match
 evenpoints   <- 1     # Number of point for an even match
@@ -13,119 +11,192 @@ normalgoals <- normalgoals - .5
 ## Read data. Includes country, group and any skill/background
 ##
 
-indata <- read.table("uefa2016.txt", header=TRUE)
-groupmatches <- read.table("uefa2016groupplan.txt")
-
-groupmatches <- cbind(groupmatches, rep(NA, nrow(groupmatches)), rep(NA, nrow(groupmatches)))
+indata <- read.table("../uefa2016.txt", header=TRUE)
+indata$id <- 1:24
 
 
+groupmatches <- read.table("../uefa2016groupplan.txt", header=TRUE)
+groupmatches <- data.frame(groupmatches, goals1=rep(NA, nrow(groupmatches)), goals2=rep(NA, nrow(groupmatches)))
 
-#
-# Danske spils odds er udregnet ved 91 / ssh%
-# Det vil sige 40.5 ssh for at vinde giver odds 2
-# Hvis man fraregner gevinsten til danskespil vil
-# odds 2 svare til 50%
-#
-odds <- c(70, 45, 18, 70,
-          70, 7.5, 18, 3.8,
-          80, 15, 40, 3.5,
-          13, 10, 60, 45
-          )
 
-# odds <- odds**sqrt(2)
-
-#
-                                        # Initial setup holds the initial data
-#
-Initial.setup <- data.frame(country, group, odds)
-
-#
+                                        #
 # Include model
 #
 source("skellam.r")
 
 
 
-playgame <- function(team1, team2, data) {
+playgame <- function(team1, team2, data, musthavewinner=FALSE) {
+#    res <- cbind(rep(1,length(team1)), rep(2, length(team2)))
+    res <- cbind(rpois(length(team1), lambda=2.75), rpois(length(team2), lambda=2.75))
 
-    cbind(rep(1,length(team1)), rep(2, length(team2)))
+    ## Simulate penalty kick situation
+    if (musthavewinner) {
+        pick <- res[,1]==res[,2]
+        ## Give a point randomly
+        rassign <- sample(1:2, size=sum(pick), replace=TRUE)
+        res[cbind(seq_len(length(pick))[pick], rassign)] <- res[cbind(seq_len(length(pick))[pick], rassign)] +1
+    }
+    res
+}
+
+findWinner <- function(matches, points.win=winpoints, points.even=evenpoints) {
+    matches$p1 <- ifelse(matches$goals1>matches$goals2, points.win, 0)
+    matches$p2 <- ifelse(matches$goals2>matches$goals1, points.win, 0)
+    matches$p1[matches$goals1 == matches$goals2] <- points.even
+    matches$p2[matches$goals1 == matches$goals2] <- points.even
+    matches$winner <- rep(0, nrow(matches))
+    matches$winner[matches$p1==points.win] <- matches$team1[matches$p1==points.win]
+    matches$winner[matches$p2==points.win] <- matches$team2[matches$p2==points.win]
+    matches
 }
 
 
-nsim <- 100
+simulateMatches <- function(matches, data, musthavewinner=FALSE) {
+    ## Find relevant matches to simulate
+    findmatches <- apply(matches, 1, FUN=function(x) {any(is.na(x))})
+    ## Simulate matches
+    matches[findmatches,c("goals1", "goals2")] <- playgame(matches[findmatches, 1], matches[findmatches, 2], data, musthavewinner=musthavewinner)
+    findWinner(matches)
+}
+
+
 
 simulateTournament <- function(n=100, groupmatches, FUN=playgame, data, points.win=3, points.even=1) {
 
+    data$wins <- rep(0, nrow(data))
     for (i in 1:n) {
         ##
-        ## Simulate group round
+        ## Simulate group stage
         ##
-
         gmatch <- groupmatches
         d <- data
 
-        ## Find matches to simulate
-        findmatches <- apply(groupmatches, 1, FUN=function(x) {any(is.na(x))})
-        gmatch[findmatches,3:4] <- playgame(groupmatches[findmatches, 1], groupmatches[findmatches, 2], data)
-
-        gmatch$p1 <- ifelse(gmatch[,3]>gmatch[,4], points.win, 0)
-        gmatch$p2 <- ifelse(gmatch[,4]>gmatch[,3], points.win, 0)
-        gmatch$p1[gmatch[,3] == gmatch[,4]] <- 1
-        gmatch$p2[gmatch[,3] == gmatch[,4]] <- 1
+        ## Simulate the group stage
+        gmatch <- simulateMatches(gmatch, d, musthavewinner=FALSE)
+        # print(gmatch)
+        individualmatrix <- diag(nrow(d))
+        ## Fill in indiviual matches
+        individualmatrix[cbind(pmin(gmatch$team1, gmatch$team2),pmax(gmatch$team1, gmatch$team2))] <- gmatch$goals1 - gmatch$goals2
 
         ## Find / order winners within each group
         d$points <- sapply(1:nrow(d), function(x) { sum(gmatch$p1[gmatch[,1]==x]) + sum(gmatch$p2[gmatch[,2]==x]) } )
 
         ## order within group
         res <- d[order(rev(d$group), d$points, decreasing=TRUE),]
+        print(gmatch)
+        print(res)
+
+        ooo <-
+        by(res, list(res$group, res$points), FUN=function(x) {
+               print(x)
+               listofteams <- x$id
+               partdf <- gmatch[gmatch$team1 %in% listofteams & gmatch$team2 %in% listofteams, ]
+               cat("Found these")
+               print(partdf)
+               x$lpoints <- rep(0, nrow(x))
+               for (i in 1:nrow(partdf)) {
+                   x$lpoints[x$id==partdf$team1[i]] <- x$lpoints[x$id==partdf$team1[i]] + partdf$p1[x$id==partdf$team1[i]]
+                   x$lpoints[x$id==partdf$team2[i]] <- x$lpoints[x$id==partdf$team2[i]] + partdf$p2[x$id==partdf$team2[i]]
+               }
+               cat("NEW x")
+               print(x)
+
+           })
+
+
+        ## Now for each equal point score within each group find the order of the given participants
+
 
         ##
         ## Knockout phase
         ## Who designed this system? So obnoxious
         ##
-        ## First figure out which 4 3rds that get a spot
+        ## First figure out which four 3rds that get a spot
         threeranks <- d[seq(3, 23, 4),]
-
         ## Sort the 3rd positions and get the 4 best groups form them
+        threeranks <- threeranks[order(threeranks$points, decreasing=TRUE),]
+        thirdposcode <- paste0(sort(threeranks$group[1:4]),collapse="")
+#        print(thirdposcode)
 
-        get the groups. paste the group names into an ordered string
-        thirdpos <- (switch(xxxx,
-                           "ABCD"=c(3, 4, 1, 2),
-                           "ABCE"=c(3, 1, 2, 5),
-                           "ABCF"=c(3, 1, 2, 6),
-                           "ABDE"=c(4, 1, 2, 5),
-                           "ABDF"=c(4, 1, 2, 6),
-                           "ABEF"=c(5, 1, 2, 6),
-                           "ACDE"=c(3, 4, 1, 5),
-                           "ACDF"=c(3, 4, 2, 6),
-                           "ACEF"=c(3, 1, 6, 5),
-                           "ADEF"=c(4, 1, 6, 5),
-                           "BCDE"=c(3, 4, 2, 5)
-                           "BCDF"=c(3, 4, 2, 6),
-                           "BCEF"=c(5, 3, 2, 6),
-                           "BDEF"=c(5, 4, 2, 6),
-                           "CDEF"=c(3, 4, 6, 5))-1)*4+3
+        thirdpos <- (switch(thirdposcode,
+                            "ABCD"=c(3, 4, 1, 2),
+                            "ABCE"=c(3, 1, 2, 5),
+                            "ABCF"=c(3, 1, 2, 6),
+                            "ABDE"=c(4, 1, 2, 5),
+                            "ABDF"=c(4, 1, 2, 6),
+                            "ABEF"=c(5, 1, 2, 6),
+                            "ACDE"=c(3, 4, 1, 5),
+                            "ACDF"=c(3, 4, 2, 6),
+                            "ACEF"=c(3, 1, 6, 5),
+                            "ADEF"=c(4, 1, 6, 5),
+                            "BCDE"=c(3, 4, 2, 5),
+                            "BCDF"=c(3, 4, 2, 6),
+                            "BCEF"=c(5, 3, 2, 6),
+                            "BDEF"=c(5, 4, 2, 6),
+                            "CDEF"=c(3, 4, 6, 5))-1)*4+3
 
-        komatches <- matrix(rep(0, 16), ncol=2)
-        komatches[1,] <- d$id[2, 10]
-        komatches[2,] <- d$id[13, thirdpos[4]]
-        komatches[3,] <- d$id[5, thirdpos[2]]
-        komatches[4,] <- d$id[21, 18]
-        komatches[5,] <- d$id[9, thirdpos[3]]
-        komatches[6,] <- d$id[17, 14]
-        komatches[7,] <- d$id[1, thirdpos[1]]
-        komatches[8,] <- d$id[6, 22]
+        komatches <- data.frame(team1=rep(0, 8),
+                                team2=rep(0, 8),
+                                goals1=rep(NA, 8),
+                                goals2=rep(NA, 8))
 
+        komatches[1,c("team1", "team2")] <- d$id[c(2, 10)]
+        komatches[2,c("team1", "team2")] <- d$id[c(13, thirdpos[4])]
+        komatches[3,c("team1", "team2")] <- d$id[c(5, thirdpos[2])]
+        komatches[4,c("team1", "team2")] <- d$id[c(21, 18)]
+        komatches[5,c("team1", "team2")] <- d$id[c(9, thirdpos[3])]
+        komatches[6,c("team1", "team2")] <- d$id[c(17, 14)]
+        komatches[7,c("team1", "team2")] <- d$id[c(1, thirdpos[1])]
+        komatches[8,c("team1", "team2")] <- d$id[c(6, 22)]
+
+        komatches <- simulateMatches(komatches, d, musthavewinner=TRUE)
+
+        ## Quarter finals
+        qmatches <- data.frame(team1=komatches$winner[c(1,3,5,7)],
+                               team2=komatches$winner[c(2,4,6,8)],
+                               goals1=rep(NA, 4), goals2=rep(NA,4))
+
+        qmatches <- simulateMatches(qmatches, d, musthavewinner=TRUE)
+
+        ## Semi finals
+        smatches <- data.frame(team1=qmatches$winner[c(1,3)],
+                               team2=qmatches$winner[c(2,4)],
+                               goals1=rep(NA, 2), goals2=rep(NA, 2))
+
+        smatches <- simulateMatches(smatches, d, musthavewinner=TRUE)
+
+        ## Finals
+        fmatches <- data.frame(team1=smatches$winner[c(1)],
+                               team2=smatches$winner[c(2)],
+                               goals1=rep(NA, 1), goals2=rep(NA, 1))
+
+        fmatches <- simulateMatches(fmatches, d, musthavewinner=TRUE)
+
+        data$wins[fmatches$winner[1]] <- data$wins[fmatches$winner[1]] +1
+
+#        print(komatches)
+        print(fmatches)
 
     }
 
     res
+    data
 }
 
+result <- simulateTournament(n=100, groupmatches=groupmatches, data=indata)
 
+reorder(miRNA, -value)
 
+library(ggplot2)
+plot1 <- ggplot(result, aes(x=reorder(country, -wins), y=wins, fill=group)) +
+#    stat_summary(fun.y=mean,geom="bar")+
+    geom_bar(stat="identity") + geom_text(aes(label=wins), vjust=1.6, color="white", size=3.5) +
+      theme(axis.text.x = element_text(angle=60, hjust = 1))
 
+plot1
 
+remove <- function(x) {
 
 
 #
@@ -487,3 +558,5 @@ EstimateFinalRound  <- function(winners, runups) {
 
 
 end.result <- GroupWinner(10000, PlayedMatches, ncountries=groupsize*ngroups)
+
+}
