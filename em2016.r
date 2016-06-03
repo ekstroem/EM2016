@@ -12,11 +12,11 @@ source("skellam.r")
 ## Read data. Includes country, group and any skill/background
 ##
 
-indata <- read.table("../uefa2016.txt", header=TRUE)
+indata <- read.table("uefa2016.txt", header=TRUE)
 indata$id <- 1:24
 
 
-groupmatches <- read.table("../uefa2016groupplan.txt", header=TRUE)
+groupmatches <- read.table("uefa2016groupplan.txt", header=TRUE)
 groupmatches <- data.frame(groupmatches, goals1=rep(NA, nrow(groupmatches)), goals2=rep(NA, nrow(groupmatches)))
 
 
@@ -33,6 +33,9 @@ indata$elo <- c(1591, 1948, 1725, 1744,
                 1795, 1730, 1983, 1795,
                 1905, 1850, 1752, 1729,
                 1704, 1670, 1647, 1889)
+
+## Boost Frankrigs rating pga hjemmebanefordel med 5%
+indata$elo[2] <- indata$elo[2]*1.05
 
 elo <- indata$elo
 
@@ -320,6 +323,8 @@ simulateTournament <- function(n=100, groupmatches, FUN=playgame, data, points.w
 }
 
 result <- simulateTournament(n=1000, groupmatches=groupmatches, data=indata)
+
+save(result, file="soccer.rda")
 
 sankey$links$source <- sankey$links$source-1
 sankey$links$target <- sankey$links$target-1
